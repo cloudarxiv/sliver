@@ -6,14 +6,15 @@
 #include <string>
 #include <vector>
 #include "KernelWrapper.h"
-#include "MatrixAddKernel.h"
+#include "ClockBlockKernel.h"
 #include "RoundRobinScheduler.h"
 #include "FCFSScheduler.h"
 #include "PriorityScheduler.h"
 
-#define NUM_KERNELS 50
+#define NUM_KERNELS 10
 
 CUdevice device;
+int clockRate;
 CUcontext context;
 size_t totalGlobalMem;
 
@@ -36,6 +37,9 @@ void initCuda()
     char name[100];
     cuDeviceGetName(name, 100, device);
     printf("> Using device 0: %s\n", name);
+
+    // get device properties
+    checkCudaErrors(cuDeviceGetAttribute(&clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
 
     // get compute capabilities and the devicename
     checkCudaErrors(cuDeviceComputeCapability(&major, &minor, device));
@@ -60,30 +64,33 @@ int main(int argc, char **argv)
     initCuda();
     srand(0);
 
-    // RoundRobinScheduler scheduler;
+    RoundRobinScheduler scheduler;
     // FCFSScheduler scheduler;
-    PriorityScheduler scheduler;
 
-    const std::string moduleFile = "./ptx/matrixAdd.ptx";
-    const std::string kernelName = "matrixAdd";
+    const std::string moduleFile = "clockBlock.ptx";
+    const std::string kernelName = "clockBlock";
 
     CUstream streams[NUM_KERNELS];
-    MatrixAddKernel matrixAddKernels[NUM_KERNELS];
+    std::vector<ClockBlockKernel> clockBlockKernels;
+    clockBlockKernels.reserve(NUM_KERNELS);
+
     kernel_attr_t attrs[NUM_KERNELS];
     std::vector<KernelWrapper> wrappers;
     for (int i = 0; i < NUM_KERNELS; ++i)
     {
         checkCudaErrors(cuStreamCreate(&streams[i], CU_STREAM_DEFAULT));
-        matrixAddKernels[i].getKernelConfig(attrs[i].gridDimX, attrs[i].gridDimY, attrs[i].gridDimZ,
-                                            attrs[i].blockDimX, attrs[i].blockDimY, attrs[i].blockDimZ);
+        clockBlockKernels.emplace_back(clockRate);
 
-        attrs[i].sGridDimX = attrs[i].gridDimX / 16;
-        attrs[i].sGridDimY = attrs[i].gridDimY;
-        attrs[i].sGridDimZ = attrs[i].gridDimZ;
+        clockBlockKernels[i].getKernelConfig(attrs[i].gridDimX, attrs[i].gridDimY, attrs[i].gridDimZ,
+                                             attrs[i].blockDimX, attrs[i].blockDimY, attrs[i].blockDimZ);
+
+        attrs[i].sGridDimX = attrs[i].gridDimX / 4;
+        attrs[i].sGridDimY = 1;
+        attrs[i].sGridDimZ = 1;
         attrs[i].sharedMemBytes = 0;
         attrs[i].stream = streams[i];
 
-        KernelWrapper wrapper(&scheduler, context, moduleFile, kernelName, &attrs[i], &matrixAddKernels[i]);
+        KernelWrapper wrapper(&scheduler, context, moduleFile, kernelName, &attrs[i], &clockBlockKernels[i]);
         wrapper.setNiceValue(i % 2);
         wrappers.emplace_back(wrapper);
     }
